@@ -7,6 +7,7 @@ import (
 	"path"
 	"remote-deploy/ssh"
 	"remote-deploy/util"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -57,16 +58,17 @@ func parseConfig() ssh.Client {
 	return client
 }
 
-func begin(client *ssh.Client) {
+func begin(client *ssh.Client) error {
 	if !util.IsExist(localDir) || !util.IsDir(localDir) {
-		fmt.Println("本地目录不合法")
-		return
+		err := fmt.Errorf("本地目录不合法")
+		fmt.Println(err)
+		return err
 	}
 
 	fmt.Println("连接服务器...")
 	if err := client.Connect(); err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	fmt.Println("完成\n")
 
@@ -74,7 +76,7 @@ func begin(client *ssh.Client) {
 	baseName := path.Base(localDir)
 	if err := client.Execute(fmt.Sprintf("rm -rf %s; mkdir -p %s", tmpDir, tmpDir)); err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	fmt.Println("完成\n")
 
@@ -82,29 +84,37 @@ func begin(client *ssh.Client) {
 	fileName, err := util.Compress(localDir)
 	if err != nil {
 		fmt.Printf("压缩失败: %s", err)
-		return
+		return err
 	}
 	if err := ssh.UploadFile(client, fileName, tmpDir); err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	fmt.Println("完成\n")
 
 	fmt.Println("重启服务")
 	if err := client.Execute(fmt.Sprintf("cd %s && tar zxf %s && systemctl stop tomcat8 && rm -rf %s && mv %s %s && systemctl start tomcat8", tmpDir, fileName, path.Join(targetDir, baseName), baseName, targetDir)); err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	_ = os.Remove(fileName)
 	fmt.Println("部署完成")
 	client.Close()
+	return nil
 }
 
 func main() {
 	client := parseConfig()
-	begin(&client)
+	err := begin(&client)
 
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	<-done
+	if runtime.GOOS == "windows" {
+		done := make(chan os.Signal, 1)
+		signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+		<-done
+	}
+	if err != nil {
+		os.Exit(1)
+	} else {
+		os.Exit(0)
+	}
 }
